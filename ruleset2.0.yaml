@@ -1,0 +1,360 @@
+modelVersion: 2.0
+
+docker-images:
+  - adp-helm-dr-check: armdocker.rnd.ericsson.se/sandbox/adp-staging/adp-cicd/common-library-adp-helm-dr-check:latest
+  - adp-release-auto: armdocker.rnd.ericsson.se/sandbox/adp-staging/adp-cicd/bob-adp-release-auto:4.7.2
+  - cnbuild-build-utilities: armdocker.rnd.ericsson.se/proj-enm/cenm-build-utilities:latest
+  - adp-release-ihcauto: armdocker.rnd.ericsson.se/proj-adp-cicd-drop/adp-int-helm-chart-auto:latest
+  - eric-enm-version-auto: armdocker.rnd.ericsson.se/proj-enm/eric-enm-version-auto:latest
+  - py3kubehelmbuilder: armdocker.rnd.ericsson.se/proj-adp-cicd-drop/bob-py3kubehelmbuilder:latest
+
+properties:
+  - helm-chart-path: chart/eric-enmsg-fmx-integration
+  - chart-repo-internal: https://arm.epk.ericsson.se/artifactory/proj-enm-dev-internal-helm/eric-enmsg-fmx-integration/
+  - helm-chart-name: eric-enmsg-fmx-integration
+  - chart-repo-release: https://arm.epk.ericsson.se/artifactory/proj-enm-helm/eric-enmsg-fmx-integration/
+
+env:
+  - RELEASE (default=true)
+  - HELM_REPO_TOKEN
+  - ISO_VERSION (default=1.0.5555)
+  - PRODUCT_SET
+  - BUILD_DATE (default = $(date +%d%m%Y-%H%M%S --utc))
+  - AUTHOR_NAME
+  - AUTHOR_EMAIL
+  - HELM_USER
+  - HELM_TOKEN
+  - GIT_COMMITTER_NAME
+  - GIT_COMMITTER_EMAIL
+  - ENABLE_HELM_V3 (default=true)
+  - INTEGRATION_CHART_VERSION
+  - SPRINT_TAG
+  - CHART_NAME
+  - CHART_REPO
+  - CHART_VERSION
+  - CHART_PATH
+  - GIT_REPO_URL
+  - HELM_INTERNAL_REPO
+  - HELM_DROP_REPO
+  - HELM_RELEASED_REPO
+  - INT_ENM_CHART
+  - INT_ENM_CHART_REPO
+  - INT_CHART_VERSION
+  - ARM_API_TOKEN
+  - GERRIT_USERNAME
+  - GERRIT_PASSWORD
+  - ERIC_ENM_MODELS_IMAGE_TAG
+  - REQUIREMENTS_FILE(default="requirements.yaml")
+  - GIT_BRANCH (default=master)
+  - ALLOW_DOWNGRADE (default=false)
+  - HELM_REPO_CREDENTIALS
+  - PWD
+  - REDIS_E2E_VERSION
+  - REDIS_OPERATOR_VERSION
+  - REDIS_OPERAND_VERSION
+  - KUBECONFIG (default=adp_dashboard/hahn183.conf)
+  - NAMESPACE (default=fmx-adp-staging)
+
+var:
+  - commit-hash
+  - version
+  - version-prefix
+  - rstate
+  - package-size
+
+rules:
+  swap-latest-versions-with-numbers:
+    - task: swap_versions
+      docker-image: eric-enm-version-auto
+      docker-flags:
+        - "--env-file enm_artifact.properties"
+      cmd: python /substitute_values.py
+
+  generate-new-version:
+    - task: generate-version
+      docker-image: adp-release-auto
+      cmd: generate-version -f VERSION_PREFIX --is-release ${env.RELEASE} --output version
+    - task: set-version-prefix
+      cmd: cat VERSION_PREFIX > .bob/var.version-prefix
+    - task: generate-rstate
+      docker-image: adp-release-auto
+      cmd: get_rstate.py ${var.version} > .bob/var.rstate
+    - task: get-commit-hash
+      docker-image: adp-release-auto
+      cmd: git rev-parse --verify HEAD > .bob/var.commit-hash
+
+  clean:
+    - task: rm
+      cmd:
+        - rm -rf .bob/
+        - rm -rf artifact.properties
+        - rm -rf int-metadata-artifact.json
+
+  lint-helm:
+    - task: helm-lint
+      docker-flags:
+        - "--env ENABLE_HELM_V3=${env.ENABLE_HELM_V3}"
+      docker-image: adp-release-auto
+      cmd:
+        - helm lint ${helm-chart-path}
+        - helm dep up chart/${helm-chart-name}
+
+  lint-only-helm:
+    - task: lint-only-helm
+      docker-flags:
+        - "--env ENABLE_HELM_V3=${env.ENABLE_HELM_V3}"
+      docker-image: adp-release-auto
+      cmd:
+        - helm lint ${helm-chart-path}
+
+  build-helm:
+    - task: helm-package
+      docker-image: adp-release-auto
+      docker-flags:
+        - "--env ENABLE_HELM_V3=${env.ENABLE_HELM_V3}"
+      cmd: helm-package --folder ${helm-chart-path} --version ${var.version} --replace VERSION=${var.version} --replace RSTATE=${var.rstate}
+
+  test-helm:
+    - task: helm-chart-check
+      docker-image: adp-helm-dr-check
+      cmd: java -jar /helm-dr-check.jar --helm-chart ${helm-chart-path} -c
+
+  helm-push:
+    - task: helm-push
+      docker-image: adp-release-ihcauto
+      cmd: arm-upload -f .bob/${helm-chart-name}-${var.version}.tgz -u ${chart-repo-internal} -t ${env.HELM_REPO_TOKEN}
+
+  generate-output-parameters:
+    - task: generate-version
+      docker-image: adp-release-ihcauto
+      cmd: ihc-generate-artifacts --int-chart-name ${helm-chart-name} --int-chart-version ${var.version}  --int-chart-repo ${chart-repo-internal}
+
+  generate-int-metadata-parameters:
+    - task: get-package-size
+      cmd:  du -b .bob/${helm-chart-name}-${var.version}.tgz | cut -f1 > .bob/var.package-size
+    - task: generate-int-metadata-parameters
+      docker-image: cnbuild-build-utilities
+      cmd: int-generate-metadata-artifacts --product-set ${env.PRODUCT_SET} --int-chart-name ${helm-chart-name} --int-chart-version ${var.version}  --int-chart-repo ${chart-repo-internal} --int-chart-path ${helm-chart-path}  --iso-version ${env.ISO_VERSION} --int-file-size ${var.package-size} --int-commit-hash ${var.commit-hash}
+
+  create-git-tag:
+    - task: create-git-tag
+      docker-image: adp-release-auto
+      docker-flags:
+        - "--env GIT_COMMITTER_NAME='${env.GIT_COMMITTER_NAME}'"
+        - "--env GIT_COMMITTER_EMAIL='${env.GIT_COMMITTER_EMAIL}'"
+      cmd: git tag --annotate ${var.version} --message "Build Version ${var.version} by ${env.AUTHOR_NAME} <${env.AUTHOR_EMAIL}>"
+
+  remove-git-tag:
+    - task: remove-git-tag
+      docker-image: adp-release-auto
+      cmd: git tag --delete ${var.version}
+
+  get-chart-versions:
+    - task: prepare-chart
+      docker-image: cnbuild-build-utilities
+      docker-flags:
+        - --env CHART_PATH="${helm-chart-path}"
+        - --env JENKINS_URL
+        - --env JENKINS_USER_NAME
+        - --env JENKINS_API_TOKEN
+        - --env POINTFIX
+      cmd:
+        - get-chart-versions
+
+  helm-publish:
+    - task: helm-publish
+      docker-image: adp-release-ihcauto
+      cmd: arm-upload -f ${helm-chart-name}-${env.INTEGRATION_CHART_VERSION}.tgz -u ${chart-repo-release} -t ${env.HELM_REPO_TOKEN}
+
+  generate-adp-parameters:
+    - task: generate-adp-parameters
+      docker-image: adp-release-ihcauto
+      cmd: ihc-generate-artifacts --int-chart-name ${helm-chart-name} --int-chart-version ${env.INTEGRATION_CHART_VERSION}  --int-chart-repo ${chart-repo-release}
+
+  publishwithreq:
+    - task: publish-chart
+      docker-image: adp-release-ihcauto
+      docker-flags:
+        - "-v /etc/group:/etc/group:ro"
+        - "-v /etc/passwd:/etc/passwd:ro"
+        - "-v '${env.HELM_REPO_CREDENTIALS}':'${env.HELM_REPO_CREDENTIALS}'"
+        - "--env REQUIREMENTS_FILE='${env.REQUIREMENTS_FILE}'"
+        - "--env GERRIT_USERNAME='${env.GERRIT_USERNAME}'"
+        - "--env GERRIT_PASSWORD='${env.GERRIT_PASSWORD}'"
+        - "--env GIT_REPO_URL='${env.GIT_REPO_URL}'"
+        - "--env CHART_PATH='${env.CHART_PATH}'"
+        - "--env HELM_INTERNAL_REPO='${env.HELM_INTERNAL_REPO}'"
+        - "--env HELM_DROP_REPO='${env.HELM_DROP_REPO}'"
+        - "--env HELM_RELEASED_REPO='${env.HELM_RELEASED_REPO}'"
+        - "--env ARM_API_TOKEN='${env.ARM_API_TOKEN}'"
+        - "--env IGNORE_NON_RELEASED=false"
+        - "--env AUTOMATIC_RELEASE=false"
+        - "--env ALWAYS_RELEASE=false"
+        - "--env IGNORE_MISSING_DEPENDENCIES=true"
+        - "--env FORCE_VERSION_UPDATE=true"
+        - "--env GIT_BRANCH='${env.GIT_BRANCH}'"
+        - "--env VERSION_STEP_STRATEGY_DEPENDENCY=PATCH"
+        - "--env HELM_REPO_CREDENTIALS='${env.HELM_REPO_CREDENTIALS}'"
+        - "--env CI_HELM=true"
+      cmd:
+        - ihc-auto publish
+
+  publish:
+    - task: publish-chart
+      docker-image: adp-release-ihcauto
+      docker-flags:
+        - "-v /etc/group:/etc/group:ro"
+        - "-v /etc/passwd:/etc/passwd:ro"
+        - "-v '${env.HELM_REPO_CREDENTIALS}':'${env.HELM_REPO_CREDENTIALS}'"
+        - "--env GERRIT_USERNAME='${env.GERRIT_USERNAME}'"
+        - "--env GERRIT_PASSWORD='${env.GERRIT_PASSWORD}'"
+        - "--env GIT_REPO_URL='${env.GIT_REPO_URL}'"
+        - "--env CHART_PATH='${env.CHART_PATH}'"
+        - "--env HELM_INTERNAL_REPO='${env.HELM_INTERNAL_REPO}'"
+        - "--env HELM_DROP_REPO='${env.HELM_DROP_REPO}'"
+        - "--env HELM_RELEASED_REPO='${env.HELM_RELEASED_REPO}'"
+        - "--env ARM_API_TOKEN='${env.ARM_API_TOKEN}'"
+        - "--env CHART_NAME='${env.CHART_NAME}'"
+        - "--env CHART_VERSION='${env.CHART_VERSION}'"
+        - "--env IGNORE_NON_RELEASED=false"
+        - "--env AUTOMATIC_RELEASE=false"
+        - "--env ALWAYS_RELEASE=false"
+        - "--env IGNORE_MISSING_DEPENDENCIES=true"
+        - "--env ALLOW_DOWNGRADE='${env.ALLOW_DOWNGRADE}'"
+        - "--env HELM_REPO_CREDENTIALS='${env.HELM_REPO_CREDENTIALS}'"
+        - "--env CI_HELM=true"
+      cmd:
+        - ihc-auto publish
+
+  preparewithreq:
+    - task: prepare-chart
+      docker-image: adp-release-ihcauto
+      docker-flags:
+        - "--env REQUIREMENTS_FILE='${env.REQUIREMENTS_FILE}'"
+        - "--env GERRIT_USERNAME='${env.GERRIT_USERNAME}'"
+        - "--env GERRIT_PASSWORD='${env.GERRIT_PASSWORD}'"
+        - "--env GIT_REPO_URL='${env.GIT_REPO_URL}'"
+        - "--env CHART_PATH='${env.CHART_PATH}'"
+        - "--env HELM_INTERNAL_REPO='${env.HELM_INTERNAL_REPO}'"
+        - "--env HELM_DROP_REPO='${env.HELM_DROP_REPO}'"
+        - "--env HELM_RELEASED_REPO='${env.HELM_RELEASED_REPO}'"
+        - "--env ARM_API_TOKEN='${env.ARM_API_TOKEN}'"
+        - "--env IGNORE_NON_RELEASED=false"
+        - "--env AUTOMATIC_RELEASE=false"
+        - "--env ALWAYS_RELEASE=false"
+        - "--env IGNORE_MISSING_DEPENDENCIES=true"
+      cmd:
+        - ihc-auto prepare
+
+  prepare:
+    - task: prepare-chart
+      docker-image: adp-release-ihcauto
+      docker-flags:
+        - "--env GERRIT_USERNAME='${env.GERRIT_USERNAME}'"
+        - "--env GERRIT_PASSWORD='${env.GERRIT_PASSWORD}'"
+        - "--env GIT_REPO_URL='${env.GIT_REPO_URL}'"
+        - "--env CHART_PATH='${env.CHART_PATH}'"
+        - "--env HELM_INTERNAL_REPO='${env.HELM_INTERNAL_REPO}'"
+        - "--env HELM_DROP_REPO='${env.HELM_DROP_REPO}'"
+        - "--env HELM_RELEASED_REPO='${env.HELM_RELEASED_REPO}'"
+        - "--env ARM_API_TOKEN='${env.ARM_API_TOKEN}'"
+        - "--env CHART_NAME='${env.CHART_NAME}'"
+        - "--env CHART_VERSION='${env.CHART_VERSION}'"
+        - "--env CHART_REPO='${env.CHART_REPO}'"
+        - "--env IGNORE_NON_RELEASED=false"
+        - "--env AUTOMATIC_RELEASE=false"
+        - "--env ALWAYS_RELEASE=false"
+        - "--env IGNORE_MISSING_DEPENDENCIES=true"
+      cmd:
+        - ihc-auto prepare
+
+  manage-product-set:
+    - task: retrieve-latest-green-charts-and-values
+      docker-image: py3kubehelmbuilder
+      cmd: python3 adp_dashboard/get_latest_green_build_charts_and_values.py .
+    - task: decompress-integration-charts
+      cmd: for integration_chart in *.tgz; do tar -xzf "$integration_chart"; done
+    - task: rename-values-files
+      cmd: mv eric-enm-single-instance-production-integration-values-*.yaml eric-enm-single-instance-production-integration-values.yaml
+
+  manage-namespace:
+    - task: create-namespace
+      docker-image: py3kubehelmbuilder
+      docker-flags:
+        - "--volume ${env.PWD}:${env.PWD}"
+        - "--env KUBECONFIG=${env.PWD}/adp_dashboard/hahn183.conf"
+      cmd: ${env.PWD}/adp_dashboard/namespace_handler.sh ${env.NAMESPACE}
+    - task: delete-namespace
+      docker-image: py3kubehelmbuilder
+      docker-flags:
+        - "--volume ${env.PWD}:${env.PWD}"
+        - "--env KUBECONFIG=${env.PWD}/adp_dashboard/hahn183.conf"
+      cmd: ${env.PWD}/adp_dashboard/namespace_handler.sh ${env.NAMESPACE} --delete
+
+  create-secrets:
+    - task: create-jboss-secret
+      docker-image: py3kubehelmbuilder
+      docker-flags:
+        - "--volume ${env.PWD}:${env.PWD}"
+        - "--env KUBECONFIG=${env.PWD}/adp_dashboard/hahn183.conf"
+      cmd:
+        - helm template -s templates/jboss-secret.yaml ${env.PWD}/eric-enm-pre-deploy-integration/ > jboss-secret.yaml
+        - kubectl create -f jboss-secret.yaml -n ${env.NAMESPACE}
+
+  update-charts:
+    - task: prepare-eric-enmsg-fmx-integration-chart
+      cmd:
+        - rm -rf eric-enm-stateless-integration/charts/eric-enmsg-fmx-integration/charts/*
+    - task: update-eric-enmsg-fmx-integration-chart
+      docker-image: py3kubehelmbuilder
+      docker-flags:
+        - "--volume ${env.PWD}/eric-enm-stateless-integration/charts/eric-enmsg-fmx-integration/:${env.PWD}"
+      cmd:
+        - yq-4.x eval "(.dependencies[] | select(.name == \"eric-data-key-value-database-rd\")).version = \"${env.REDIS_OPERATOR_VERSION}\"" ${env.PWD}/Chart.yaml -i
+        - yq-4.x eval "(.dependencies[] | select(.name == \"eric-data-key-value-database-rd-operand\")).version = \"${env.REDIS_OPERAND_VERSION}\"" ${env.PWD}/Chart.yaml -i
+        - cat ${env.PWD}/Chart.yaml
+    - task: update-fmx-charts
+      docker-image: py3kubehelmbuilder
+      docker-flags:
+        - "--volume ${env.PWD}:${env.PWD}"
+        - "--env KUBECONFIG=${env.PWD}/adp_dashboard/hahn183.conf"
+      cmd: helm dependency update ${env.PWD}/eric-enm-stateless-integration/charts/eric-enmsg-fmx-integration/
+
+  install-charts:
+    - task: install-bro-chart
+      docker-image: py3kubehelmbuilder
+      docker-flags:
+        - "--volume ${env.PWD}:${env.PWD}"
+        - "--env KUBECONFIG=${env.PWD}/adp_dashboard/hahn183.conf"
+      cmd: helm install eric-enm-bro-integration-${env.NAMESPACE} ${env.PWD}/eric-enm-bro-integration/ -n ${env.NAMESPACE} --wait --timeout=1800s
+    - task: install-rwxpvc-chart
+      docker-image: py3kubehelmbuilder
+      docker-flags:
+        - "--volume ${env.PWD}:${env.PWD}"
+        - "--env KUBECONFIG=${env.PWD}/adp_dashboard/hahn183.conf"
+      cmd: helm install eric-enm-rwxpvc-${env.NAMESPACE} ${env.PWD}/eric-enm-pre-deploy-integration/charts/eric-enm-rwxpvc/ --values ${env.PWD}/eric-enm-single-instance-production-integration-values.yaml -n ${env.NAMESPACE}
+    - task: install-fmx-charts
+      docker-image: py3kubehelmbuilder
+      docker-flags:
+        - "--volume ${env.PWD}:${env.PWD}"
+        - "--env KUBECONFIG=${env.PWD}/adp_dashboard/hahn183.conf"
+      cmd:
+        - helm install fmx-rabbit-mq-${env.NAMESPACE} ${env.PWD}/eric-enm-infra-integration/charts/eric-enmsg-fmx-rabbitmq-server/ -n ${env.NAMESPACE} --wait --timeout=1800s
+        - helm install fmx-redis-${env.NAMESPACE} ${env.PWD}/eric-enm-stateless-integration/charts/eric-enmsg-fmx-integration/ --set global.registry.url=armdocker.rnd.ericsson.se --set eric-enmsg-fmx-admin-ws.enabled=false -n ${env.NAMESPACE} --wait --timeout=1800s
+
+  test-fmx:
+    - task: check-for-pod-restarts
+      docker-image: py3kubehelmbuilder
+      docker-flags:
+        - "--volume ${env.PWD}:${env.PWD}"
+        - "--env KUBECONFIG=${env.PWD}/adp_dashboard/hahn183.conf"
+      cmd: ${env.PWD}/adp_dashboard/check_for_pod_restarts.sh ${env.NAMESPACE}
+
+  update-fmx-integration-chart:
+    - task: update-redis-version
+      docker-image: py3kubehelmbuilder
+      docker-flags:
+        - "--volume ${env.PWD}/chart/eric-enmsg-fmx-integration/:${env.PWD}"
+      cmd:
+        - yq-4.x eval "(.dependencies[] | select(.name == \"eric-data-key-value-database-rd\")).version = \"${env.REDIS_OPERATOR_VERSION}\"" ${env.PWD}/Chart.yaml -i
+        - yq-4.x eval "(.dependencies[] | select(.name == \"eric-data-key-value-database-rd-operand\")).version = \"${env.REDIS_OPERAND_VERSION}\"" ${env.PWD}/Chart.yaml -i

@@ -1,0 +1,30 @@
+apiVersion: v2
+appVersion: '1.0'
+dependencies:
+- condition: eric-enmsg-fmx-actionserver.enabled
+  name: eric-enmsg-fmx-actionserver
+  repository: https://arm.epk.ericsson.se/artifactory/proj-enm-helm/
+  version: 1.35.0-31
+- condition: eric-enmsg-fmx-admin-ws.enabled
+  name: eric-enmsg-fmx-admin-ws
+  repository: https://arm.epk.ericsson.se/artifactory/proj-enm-helm/
+  version: 1.35.0-31
+- condition: eric-data-key-value-database-rd.enabled
+  name: eric-data-key-value-database-rd
+  repository: https://arm.sero.gic.ericsson.se/artifactory/proj-adp-gs-all-helm/
+  version: 5.2.0+17
+- condition: eric-data-key-value-database-rd-operand.enabled
+  name: eric-data-key-value-database-rd-operand
+  repository: https://arm.sero.gic.ericsson.se/artifactory/proj-adp-gs-all-helm/
+  version: 5.2.0-17
+- condition: eric-enmsg-fmx-inference-engine.enabled
+  name: eric-enmsg-fmx-inference-engine
+  repository: https://arm.epk.ericsson.se/artifactory/proj-enm-helm/
+  version: 1.35.0-31
+- condition: eric-enmsg-fmx-moduleserver.enabled
+  name: eric-enmsg-fmx-moduleserver
+  repository: https://arm.epk.ericsson.se/artifactory/proj-enm-helm/
+  version: 1.35.0-31
+description: A Helm chart for eric-enm-stateless-integration
+name: eric-enmsg-fmx-integration
+version: 1.35.0-29

@@ -1,0 +1,163 @@
+global:
+  registry:
+    url: serodocker.sero.gic.ericsson.se
+  pullSecret:
+  security:
+    tls:
+      enabled: false
+  hosts:
+    vnfm: vnfm.ericsson.example.com
+  timezone: UTC
+  replicas-eric-enmsg-fmx-admin-ws: 2
+  replicas-eric-enmsg-fmx-actionserver: 2
+  replicas-eric-enmsg-fmx-inference-engine: 2
+  replicas-eric-enmsg-fmx-moduleserver: 2
+
+
+ingress:
+  enabled: true
+
+
+eric-enmsg-fmx-moduleserver:
+  enabled: true
+  resources:
+    requests:
+      enabled: true
+      memory: 1000Mi
+      cpu: 150m
+    limits:
+      enabled: true
+      memory: 1000Mi
+      cpu: 500m
+
+eric-enmsg-fmx-inference-engine:
+  enabled: true
+  resources:
+    requests:
+      enabled: true
+      memory: 1000Mi
+      cpu: 150m
+    limits:
+      enabled: true
+      memory: 1000Mi
+      cpu: 500m
+
+eric-enmsg-fmx-actionserver:
+  enabled: true
+  resources:
+    requests:
+      enabled: true
+      memory: 1000Mi
+      cpu: 150m
+    limits:
+      enabled: true
+      memory: 1000Mi
+      cpu: 500m
+  livenessProbe:
+    initialDelaySeconds: 300
+  readinessProbe:
+    initialDelaySeconds: 300
+
+eric-enmsg-fmx-admin-ws:
+  enabled: true
+  resources:
+    requests:
+      enabled: true
+      memory: 3596Mi
+      cpu: 600m
+    limits:
+      enabled: true
+      memory: 4096Mi
+      cpu: 2
+  livenessProbe:
+    initialDelaySeconds: 300
+  readinessProbe:
+    initialDelaySeconds: 300
+
+eric-data-key-value-database-rd:
+  enabled: true
+  resources:
+    kvdbOperator:
+      requests:
+        memory: 500Mi
+        cpu: 100m
+      limits:
+        memory: 500Mi
+        cpu: 250m
+    logshipper:
+      limits:
+        memory: "200Mi"
+        cpu: "200m"
+      requests:
+        memory: "100Mi"
+        cpu: "100m"
+  security:
+    acl:
+      enabled: true
+  imageCredentials:
+    kvdbOperator:
+      registry:
+        url: serodocker.sero.gic.ericsson.se
+    hooklauncher:
+      registry:
+        url: serodocker.sero.gic.ericsson.se
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  log:
+    outputs: ["stream", "stdout"]
+
+
+eric-data-key-value-database-rd-operand:
+  enabled: true
+  resources:
+    node:
+      requests:
+        memory: 1000Mi
+        cpu: 150m
+      limits:
+        memory: 1000Mi
+        cpu: 500m
+    metricsExporter:
+      limits:
+        cpu: 20m
+        memory: 100Mi
+        ephemeral-storage: 2Gi
+      requests:
+        cpu: 10m
+        memory: 50Mi
+        ephemeral-storage: 2Gi
+    logshipper:
+      limits:
+        memory: "200Mi"
+        cpu: "200m"
+      requests:
+        memory: "100Mi"
+        cpu: "100m"
+  numberOfMaster: 3
+  replicationFactor: 1
+  server:
+    notifyKeySpaceEvents: xK
+    maxMemory: 450mb
+  imageCredentials:
+    node:
+      registry:
+        url: serodocker.sero.gic.ericsson.se
+    metricsExporter:
+      registry:
+        url: serodocker.sero.gic.ericsson.se
+    hooklauncher:
+      registry:
+        url: serodocker.sero.gic.ericsson.se
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  log:
+    outputs: ["stream", "stdout"]
+  security:
+    acl:
+      enabled: true

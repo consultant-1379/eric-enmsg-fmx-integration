@@ -1,0 +1,160 @@
+#!/usr/bin/env groovy
+
+def defaultBobImage = 'armdocker.rnd.ericsson.se/sandbox/adp-staging/adp-cicd/bob.2.0:1.5.0-1'
+def bob = new BobCommand()
+        .bobImage(defaultBobImage)
+        .envVars([ISO_VERSION: '${ISO_VERSION}', REDIS_E2E_VERSION: '${REDIS_E2E_VERSION}', REDIS_OPERATOR_VERSION: '${REDIS_OPERATOR_VERSION}', REDIS_OPERAND_VERSION: '${REDIS_OPERAND_VERSION}'])
+        .needDockerSocket(true)
+        .toString()
+def failedStage = ''
+
+pipeline {
+    agent {
+        label 'Cloud-Native'
+    }
+
+    stages {
+        stage('Resolve Redis operator and operand versions') {
+            steps {
+                script {
+                    env.REDIS_OPERATOR_VERSION = env.REDIS_E2E_VERSION
+                    env.REDIS_OPERAND_VERSION = env.REDIS_E2E_VERSION.replace('+', '-')
+
+                    println "REDIS_E2E_VERSION: ${env.REDIS_E2E_VERSION}"
+                    println "REDIS_OPERATOR_VERSION: ${env.REDIS_OPERATOR_VERSION}"
+                    println "REDIS_OPERAND_VERSION: ${env.REDIS_OPERAND_VERSION}"
+                }
+            }
+            post {
+                failure {
+                    script {
+                        failedStage = env.STAGE_NAME
+                    }
+                }
+            }
+        }
+
+        stage('Retrieve integration charts') {
+            steps {
+                sh "${bob} -r ruleset2.0.yaml manage-product-set"
+            }
+            post {
+                failure {
+                    script {
+                        failedStage = env.STAGE_NAME
+                    }
+                }
+            }
+        }
+
+        stage('Update FMX charts') {
+            steps {
+                sh "${bob} -r ruleset2.0.yaml update-charts"
+            }
+            post {
+                failure {
+                    script {
+                        failedStage = env.STAGE_NAME
+                    }
+                }
+            }
+        }
+
+        stage('Create namespace') {
+            steps {
+                sh "ls -l adp_dashboard"
+                sh "${bob} -r ruleset2.0.yaml manage-namespace:create-namespace"
+            }
+            post {
+                failure {
+                    script {
+                        failedStage = env.STAGE_NAME
+                    }
+                }
+            }
+        }
+
+        stage('Create secrets') {
+            steps {
+                sh "${bob} -r ruleset2.0.yaml create-secrets"
+            }
+            post {
+                failure {
+                    script {
+                        failedStage = env.STAGE_NAME
+                    }
+                }
+            }
+        }
+
+        stage('Install charts') {
+            steps {
+                sh "${bob} -r ruleset2.0.yaml install-charts"
+            }
+            post {
+                failure {
+                    script {
+                        failedStage = env.STAGE_NAME
+                    }
+                }
+            }
+        }
+
+        stage('Check for pod restarts') {
+            steps {
+                sh "${bob} -r ruleset2.0.yaml test-fmx"
+            }
+            post {
+                failure {
+                    script {
+                        failedStage = env.STAGE_NAME
+                    }
+                }
+            }
+        }
+    }
+    post {
+        always {
+            sh "${bob} -r ruleset2.0.yaml manage-namespace:delete-namespace"
+        }
+        cleanup {
+            deleteDir()
+        }
+    }
+}
+
+import groovy.transform.builder.Builder
+import groovy.transform.builder.SimpleStrategy
+@Builder(builderStrategy = SimpleStrategy, prefix = '')
+class BobCommand {
+    def bobImage = 'bob.2.0:latest'
+    def envVars = [:]
+    def needDockerSocket = false
+    String toString() {
+        def env = envVars
+                .collect({ entry -> "-e ${entry.key}=\"${entry.value}\"" })
+                .join(' ')
+
+        def cmd = """\
+            |docker run
+            |--init
+            |--rm
+            |--workdir \${PWD}
+            |--user \$(id -u):\$(id -g)
+            |-v \${PWD}:\${PWD}
+            |-v /home/enmadm100/doc_push/group:/etc/group:ro
+            |-v /home/enmadm100/doc_push/passwd:/etc/passwd:ro
+            |-v \${HOME}/.m2:\${HOME}/.m2
+            |-v \${HOME}/.docker:\${HOME}/.docker
+            |${needDockerSocket ? '-v /var/run/docker.sock:/var/run/docker.sock' : ''}
+            |${env}
+            |\$(for group in \$(id -G); do printf ' --group-add %s' "\$group"; done)
+            |--group-add \$(stat -c '%g' /var/run/docker.sock)
+            |${bobImage}
+            |"""
+        return cmd
+                .stripMargin()           // remove indentation
+                .replace('\n', ' ')      // join lines
+                .replaceAll(/[ ]+/, ' ') // replace multiple spaces by one
+    }
+}
